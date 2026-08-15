@@ -17,6 +17,7 @@ from agent_harness.checkpoints import (
 )
 from agent_harness.context import ContextBuilder
 from agent_harness.context_governor import ContextGovernor, ContextGovernorConfig
+from agent_harness.memory import DreamResult
 from agent_harness.messages import (
     AssistantMessage,
     ToolCall,
@@ -51,6 +52,7 @@ def make_runtime(
     max_injected_inputs_per_run: int = 5,
     max_input_tokens: int | None = None,
     input_token_estimator: Any = None,
+    dream: Any = None,
 ) -> tuple[AgentRuntime, InMemorySessionStore]:
     session_store = store or InMemorySessionStore()
     runtime = AgentRuntime(
@@ -64,8 +66,29 @@ def make_runtime(
         max_injected_inputs_per_run=max_injected_inputs_per_run,
         max_input_tokens=max_input_tokens,
         input_token_estimator=input_token_estimator,
+        dream=dream,
     )
     return runtime, session_store
+
+
+async def test_runtime_background_dream_drains_until_inbox_is_empty(tmp_path) -> None:
+    class FakeDream:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def run(self) -> DreamResult:
+            self.calls += 1
+            if self.calls == 1:
+                return DreamResult(did_work=True, stop_reason="completed")
+            return DreamResult(did_work=False, stop_reason="no_pending_memory")
+
+    dream = FakeDream()
+    runtime, _store = make_runtime(tmp_path, ScriptedProvider([]), dream=dream)
+
+    runtime._schedule_dream()
+    await runtime.wait_for_background_tasks()
+
+    assert dream.calls == 2
 
 
 def make_checkpoint(

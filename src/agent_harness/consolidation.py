@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from importlib.resources import files as package_files
@@ -11,6 +12,7 @@ from inspect import isawaitable
 from typing import Any
 
 from agent_harness.context import ContextBuilder, SessionContextResolver
+from agent_harness.memory.store import MemoryStore, MemoryStoreError
 from agent_harness.messages import (
     AgentMessage,
     AssistantMessage,
@@ -33,6 +35,8 @@ from agent_harness.token_estimation import (
     PromptTokenEstimator,
 )
 from agent_harness.tools.registry import ToolRegistry
+
+logger = logging.getLogger(__name__)
 
 
 class ContextSummaryGenerationError(RuntimeError):
@@ -269,6 +273,7 @@ class ContextConsolidator:
         model: str,
         config: ConsolidationConfig,
         resolver: SessionContextResolver | None = None,
+        memory_store: MemoryStore | None = None,
     ) -> None:
         if not isinstance(model, str) or not model.strip():
             raise ValueError("model must be non-empty text")
@@ -278,6 +283,7 @@ class ContextConsolidator:
         self._model = model
         self._config = config
         self._resolver = resolver or SessionContextResolver()
+        self._memory_store = memory_store
         self._locks: dict[str, asyncio.Lock] = {}
 
     async def maybe_consolidate(
@@ -298,6 +304,7 @@ class ContextConsolidator:
         lock = self._locks.setdefault(session.id, asyncio.Lock())
         async with lock:
             current = self._session_store.get_or_create(session.id)
+            self._reconcile_memory(current)
             input_reserve_tokens = (
                 self._config.effective_proactive_input_reserve_tokens
                 if pending_message is None
@@ -399,6 +406,7 @@ class ContextConsolidator:
             )
             session.record_context_summary(summary)
             self._session_store.save(session)
+            self._enqueue_memory(summary, chunk)
             created.append(summary)
             try:
                 estimated = await self._estimate_current_prompt(
@@ -421,6 +429,65 @@ class ContextConsolidator:
             estimated_tokens=estimated,
             stop_reason="max_rounds",
         )
+
+    def _enqueue_memory(
+        self,
+        summary: ContextSummary,
+        chunk: Sequence[MessageEntry],
+    ) -> None:
+        store = self._memory_store
+        if store is None:
+            return
+        source_entries = tuple(
+            entry
+            for entry in chunk
+            if not isinstance(entry.message, RuntimeStatusMessage)
+        )
+        if not source_entries:
+            return
+        try:
+            store.enqueue(
+                session_id=summary.session_id,
+                source_leaf_id=summary.source_leaf_id,
+                context_summary_id=summary.id,
+                covered_from_entry_id=source_entries[0].id,
+                covered_through_entry_id=source_entries[-1].id,
+                source_entry_ids=tuple(entry.id for entry in source_entries),
+                messages=tuple(entry.message for entry in source_entries),
+                created_at=summary.created_at,
+            )
+        except (MemoryStoreError, TypeError, ValueError):
+            # ContextSummary is already durable and remains the conversation
+            # continuity mechanism. Startup/PREPARE reconciliation can retry
+            # the idempotent enqueue without invalidating consolidation.
+            logger.exception(
+                "Could not enqueue memory source for ContextSummary %s",
+                summary.id,
+            )
+
+    def _reconcile_memory(self, session: Session) -> None:
+        """Repair the Summary-saved / Inbox-not-written crash window."""
+
+        if self._memory_store is None:
+            return
+        summaries = {summary.id: summary for summary in session.context_summaries}
+        for summary in session.context_summaries:
+            try:
+                branch = session.branch_entries(summary.source_leaf_id)
+                positions = {entry.id: index for index, entry in enumerate(branch)}
+                end = positions[summary.covered_through_entry_id] + 1
+                start = 0
+                if summary.previous_summary_id is not None:
+                    previous = summaries[summary.previous_summary_id]
+                    start = positions[previous.covered_through_entry_id] + 1
+                chunk = branch[start:end]
+                if chunk:
+                    self._enqueue_memory(summary, chunk)
+            except (KeyError, ValueError):
+                logger.exception(
+                    "Could not reconstruct memory source for ContextSummary %s",
+                    summary.id,
+                )
 
     async def _pick_boundary(
         self,

@@ -1,7 +1,7 @@
 # DAO Agent Harness 组件设计总览
 
 > 状态：Living Document  
-> 最后更新：2026-08-14  
+> 最后更新：2026-08-15
 > 用途：集中介绍当前组件、职责边界、协作方式与实现状态
 
 ## 1. 项目定位
@@ -65,6 +65,7 @@ from agent_harness.tools import ToolRegistry
 | CLI | 已实现 | 通过 RuntimeRequest、流事件和 JSONL Session 接入 AgentRuntime |
 | ContextBuilder | 已实现最小版 | 组装初始提示词和模型视图，不修改工作消息 |
 | ContextSummary / Consolidator | 已实现 v1 | 结构化摘要、JSONL 事件、SAVE 后后台探测与 PREPARE 复检 |
+| MemoryStore / Dream | 已实现 v0.1 | 强类型 Inbox、严格 MemoryPlan、两阶段 Dream、Workspace MEMORY.md 与后台排空 |
 | AgentRuntime | 已实现 | 六阶段状态机、per-Session lock、单输入上限、恢复、注入与暂停修订 |
 | 工具批次执行 | 已实现 | Runner 划分连续并行批次和 sequential 屏障 |
 | ContextCheckpoint | 已实现 v0.1 | 三节点、独立原子 Store、冲突检测与保守恢复 |
@@ -342,7 +343,7 @@ ContextBuilder 根据完整 `working_messages` 生成初始 `ModelContext`：
 
 - 按固定顺序组装 Identity、Bootstrap Files 和 Tool Contract；
 - 将强类型 AgentMessage 转换为模型消息；
-- 接受未来 Memory、MCP 和其他组件提供的额外系统片段；
+- 接受 Memory、MCP 和其他组件提供的额外系统片段；
 - 不修改 working messages；
 - 不改变 save_cursor；
 - 不保存 Session。
@@ -363,6 +364,12 @@ v1 压缩算法直接采用 nanobot Consolidator 的预算公式、50% 目标比
 最多 5 轮循环，只做 Entry Tree 与失败语义所需的适配。Summary 内容使用固定强类型结构；在
 Provider 尚无原生 JSON Schema 能力时，通过 `LLMResponse.content` 返回 JSON 文本，并在 Harness
 中执行严格解析和一次修复。
+
+长期记忆采用 nanobot 的分层思路：ContextConsolidator 每次成功覆盖新的历史消息块后，将该增量
+写入耐久 Memory Inbox；后台 Dream 先生成严格结构化 MemoryPlan，再通过只允许访问
+`memory/MEMORY.md` 的隔离 Runner 做局部修改。Memory 属于 Workspace，不属于 Session Entry Tree；
+ContextSummary 服务当前分支连续性，Memory 服务跨 Session 复用，ContextCheckpoint 服务执行恢复。
+详细协议见 [长期记忆与 Dream 设计](memory-system-design.md)。
 
 ### 10.2 AgentRuntime
 
@@ -400,7 +407,7 @@ WebSocket 或聊天渠道在后续版本通过独立 Adapter 接入；Runner 始
 - 运行事件存储和 tracing；
 - 模型层以外的失败重试策略；
 - 外部工具副作用 exactly-once；
-- 长期记忆；
+- RAG 与基于相关性的 Memory 检索；
 - 多进程 Session 协调；
 - 多模态 AgentMessage；
 - 非 Message Entry、旧消息内容编辑和分支合并。
@@ -426,6 +433,7 @@ src/agent_harness/
 ├─ runner.py
 ├─ runtime.py
 ├─ cli.py
+├─ memory/
 ├─ providers/
 ├─ tools/
 ├─ storage/
@@ -445,6 +453,7 @@ src/agent_harness/
 - [消息插入设计](message-injection-design.md)
 - [主动暂停与消息修订设计](pause-revision-design.md)
 - [Session 持久化设计](session-persistence-design.md)
+- [长期记忆与 Dream 设计](memory-system-design.md)
 - [提取与实施清单](extraction-checklist.md)
 
 ## 13. 当前验证
@@ -462,5 +471,5 @@ ContextGovernor 的工具链修复、临时裁剪、ArtifactStore、Registry 大
 和 Runtime Status 的生成、治理、持久化及摘要过滤。
 ContextCheckpoint 三节点、独立 Store、SAVE 失败恢复，以及消息插入双安全点、五条配额、多输入
 Checkpoint、后续 Runner 交接、主动暂停、局部消息修订、单输入上限、后台压缩协调和 CLI 重启
-以及 SkillCatalog、资源路径安全、Skill 工具、metadata 持久化和压缩后恢复也已覆盖。当前共
-250 个测试。
+以及 SkillCatalog、资源路径安全、Skill 工具、metadata 持久化、压缩后恢复、Memory Inbox、Dream
+失败游标、长期记忆注入和后台排空也已覆盖。当前共 276 个测试。

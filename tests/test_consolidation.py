@@ -15,6 +15,7 @@ from agent_harness.consolidation import (
     ContextSummaryGenerator,
 )
 from agent_harness.context import ContextBuilder
+from agent_harness.memory import InMemoryMemoryStore
 from agent_harness.messages import AssistantMessage, UserMessage
 from agent_harness.providers import LLMResponse
 from agent_harness.runner import AgentRunner
@@ -212,6 +213,91 @@ async def test_consolidator_creates_one_durable_summary_at_a_user_turn_boundary(
     assert summary.previous_summary_id is None
     assert store.get_or_create(session.id).context_summaries == [summary]
     assert len(session.entries) == 4
+
+
+async def test_consolidator_enqueues_only_the_newly_covered_memory_range(
+    tmp_path,
+) -> None:
+    provider = ScriptedProvider([LLMResponse(content=summary_json())])
+    session_store = InMemorySessionStore()
+    memory_store = InMemoryMemoryStore()
+    session = linear_session()
+    session_store.save(session)
+    consolidator = ContextConsolidator(
+        generator=ContextSummaryGenerator(provider, model="fake-model"),
+        token_estimator=MessageCountingEstimator(),
+        session_store=session_store,
+        memory_store=memory_store,
+        model="fake-model",
+        config=ConsolidationConfig(
+            context_window_tokens=100,
+            max_completion_tokens=10,
+            safety_buffer_tokens=0,
+        ),
+    )
+
+    result = await consolidator.maybe_consolidate(
+        session,
+        pending_message=UserMessage(content="question-3"),
+        context_builder=ContextBuilder(tmp_path),
+        tools=ToolRegistry(),
+    )
+
+    summary = result.summaries_created[0]
+    pending = memory_store.read_pending(after_cursor=0, limit=10)
+    assert len(pending) == 1
+    assert pending[0].context_summary_id == summary.id
+    assert pending[0].source_entry_ids == tuple(entry.id for entry in session.entries[:2])
+    assert pending[0].messages == tuple(entry.message for entry in session.entries[:2])
+
+
+async def test_consolidator_reconciles_a_saved_summary_missing_from_memory_inbox(
+    tmp_path,
+) -> None:
+    provider = ScriptedProvider([LLMResponse(content=summary_json())])
+    session_store = InMemorySessionStore()
+    session = linear_session()
+    session_store.save(session)
+    first = ContextConsolidator(
+        generator=ContextSummaryGenerator(provider, model="fake-model"),
+        token_estimator=MessageCountingEstimator(),
+        session_store=session_store,
+        model="fake-model",
+        config=ConsolidationConfig(
+            context_window_tokens=100,
+            max_completion_tokens=10,
+            safety_buffer_tokens=0,
+        ),
+    )
+    result = await first.maybe_consolidate(
+        session,
+        pending_message=UserMessage(content="question-3"),
+        context_builder=ContextBuilder(tmp_path),
+        tools=ToolRegistry(),
+    )
+    assert len(result.summaries_created) == 1
+
+    memory_store = InMemoryMemoryStore()
+    restored = session_store.get_or_create(session.id)
+    reconciler = ContextConsolidator(
+        generator=ContextSummaryGenerator(provider, model="fake-model"),
+        token_estimator=FixedEstimator(1),
+        session_store=session_store,
+        memory_store=memory_store,
+        model="fake-model",
+        config=ConsolidationConfig(context_window_tokens=10_000),
+    )
+
+    await reconciler.maybe_consolidate(
+        restored,
+        pending_message=UserMessage(content="question-3"),
+        context_builder=ContextBuilder(tmp_path),
+        tools=ToolRegistry(),
+    )
+
+    pending = memory_store.read_pending(after_cursor=0, limit=10)
+    assert len(pending) == 1
+    assert pending[0].context_summary_id == result.summaries_created[0].id
 
 
 async def test_proactive_probe_reserves_input_tokens_but_real_input_recheck_does_not(

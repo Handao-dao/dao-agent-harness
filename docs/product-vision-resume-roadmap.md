@@ -141,12 +141,13 @@ Session、Memory、RAG、MCP 生命周期、多 Agent 调度和应用 Transport 
 - PendingInput 双安全点消息插入、五条总配额、多输入 Checkpoint 与新 Runner 交接；
 - SkillCatalog、`activate_skill`、`read_skill_resource`、Skill 指令保护与压缩后恢复；
 - Runtime Status 强类型快照、user-role 模型投影与 Session 持久化；
-- 250 个自动化测试与 Ruff 静态检查。
+- Workspace 长期记忆、强类型 Memory Inbox、两阶段 Dream、失败游标和 ContextBuilder 注入；
+- 276 个自动化测试与 Ruff 静态检查。
 
 ### 5.2 尚未实现
 
 - 跨进程暂停快照与任意阶段恢复；
-- Memory、RAG、MCP，以及 Skill Package、安装、依赖和 Authoring；
+- RAG、MCP，以及 Skill Package、安装、依赖和 Authoring；
 - 多 Agent 委派；
 - 工具 approval、sandbox 和副作用恢复；
 - 运行 trace、评测体系和生产级数据库 Store。
@@ -159,7 +160,7 @@ Session、Memory、RAG、MCP 生命周期、多 Agent 调度和应用 Transport 
 |---|---|---|---|
 | M0 Harness Core | Loop 之外具备可靠消息、Session、工具、上下文与保存边界 | 已完成 | 当前真实版本可使用 |
 | M1 Single-Agent Runtime | 可供 CLI 调用并治理上下文与工具；安全点恢复后续增强 | 进行中（CLI v1 已验收） | Runtime、Checkpoint、ContextGovernor 和 trace 验收全部通过 |
-| M2 Memory & RAG | 同时具备跨会话连续性和有引用的外部知识 | 待实现 | Memory 来源/删除与 RAG 引用/质量测试通过 |
+| M2 Memory & RAG | 同时具备跨会话连续性和有引用的外部知识 | 进行中（Memory v0.1 已实现） | Memory 来源/删除与 RAG 引用/质量测试通过 |
 | M3 MCP & Skills | 能力可在不修改 Runner 的情况下接入、编写和受控激活 | 待实现 | MCP 离线降级、Skill 依赖/验证/审批链通过 |
 | M4 Multi-Agent | 主 Agent 能以权限和预算受控的契约委派子任务 | 待实现 | 隔离、预算、取消、结果协议和任务树 trace 通过 |
 | M5 Production | 具备数据库、迁移、安全、Eval、SDK/API 和发布能力 | 待实现 | 真实 benchmark 与发布检查通过 |
@@ -217,21 +218,26 @@ metadata，Registry 对未知工具保留通用外置与预览 fallback。后续
 
 计划：
 
-- MemoryRecord 强类型结构；
-- 用户事实、偏好、决定和成功经验的提取与合并；
-- Memory 冲突、来源、更新时间、遗忘和删除；
+- 强类型 MemoryInboxEntry、MemoryPlan 与 DreamRunRecord；
+- nanobot 式两阶段 Dream，以及人可读、可手工修订的 Workspace `MEMORY.md`；
+- 用户事实、偏好、决定和成功经验的提取、去重、修正与删除；
+- Memory Inbox 游标、失败重试、来源追踪和后台调度；
 - Retriever Protocol、Document、Chunk、Citation；
 - 文档摄取、索引、召回和结果重排；
 - ContextBuilder 的 Summary、Memory、RAG 预算分配与去重。
 
 验收：
 
-- [ ] 新 Session 能恢复明确保存的用户偏好；
-- [ ] Memory 每项具有来源并可删除；
+- [x] 新 Session 能恢复明确保存的用户偏好；
+- [x] Memory 变更可通过 DreamRunRecord 追踪来源并由后续 Dream 删除；
 - [ ] RAG 回答能返回文档引用；
 - [ ] 外部文档中的指令不会提升为 System Prompt；
 - [ ] Summary、Memory 和 RAG 不保存同一类信息的无界副本；
 - [ ] 有检索质量与 token 开销基准测试。
+
+Memory v0.1 的具体边界、输出协议和实现顺序见
+[长期记忆与 Dream 设计](memory-system-design.md)。第一版不引入 MemoryRecord 数据库、向量检索、
+自动 Skill 生成或对 USER.md/SOUL.md 的自动修改。
 
 ### M3：MCP 与 Skill 生态
 
@@ -308,7 +314,7 @@ Agent Harness，将模型调用、工具执行、上下文构建、会话持久�
   Resolver，在保留完整事实树的同时缩减模型请求历史；
 - 构建 Provider-neutral 流式事件和 Tool Registry，统一处理 SSE 工具参数聚合、Schema 校验、
   并行安全批次、错误结果回流和 `tool_call_id` 关联；
-- 建立 250 个自动化测试，覆盖 Provider、Runner、工具并发、Session replay、上下文压缩、
+- 建立 276 个自动化测试，覆盖 Provider、Runner、工具并发、Session replay、上下文压缩、
   Artifact 外置回读、ContextCheckpoint 恢复、消息插入和失败一致性。
 
 ### 7.2 成品版目标模板

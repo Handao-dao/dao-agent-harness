@@ -30,6 +30,7 @@ from agent_harness.injection import (
     MessageInjectionBatch,
     MessageInjectionPoint,
 )
+from agent_harness.memory.dream import Dream
 from agent_harness.messages import (
     AgentMessage,
     AssistantMessage,
@@ -184,6 +185,7 @@ class AgentRuntime:
         max_injected_inputs_per_run: int = 5,
         max_input_tokens: int | None = None,
         input_token_estimator: PromptTokenEstimator | None = None,
+        dream: Dream | None = None,
     ) -> None:
         if not isinstance(model, str) or not model.strip():
             raise ValueError("model must be non-empty text")
@@ -211,11 +213,14 @@ class AgentRuntime:
         self._max_injected_inputs_per_run = max_injected_inputs_per_run
         self._max_input_tokens = max_input_tokens
         self._input_token_estimator = input_token_estimator
+        self._dream = dream
         self._execution_locks: dict[str, asyncio.Lock] = {}
         self._active_runs: dict[str, _ActiveRun] = {}
         self._paused_sessions: set[str] = set()
         self._paused_runs: dict[str, _PausedRunState] = {}
         self._consolidation_tasks: dict[str, asyncio.Task[None]] = {}
+        self._dream_task: asyncio.Task[None] | None = None
+        self._dream_wakeup_requested = False
 
     def enqueue_input(
         self,
@@ -750,6 +755,7 @@ class AgentRuntime:
             tools=self._tools,
             extra_system_sections=self._extra_system_sections,
         )
+        self._schedule_dream()
 
     def _schedule_background_consolidation(self, session_id: str) -> None:
         if self._consolidator is None:
@@ -777,6 +783,7 @@ class AgentRuntime:
                 tools=self._tools,
                 extra_system_sections=self._extra_system_sections,
             )
+            self._schedule_dream()
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -791,15 +798,62 @@ class AgentRuntime:
             self._consolidation_tasks.pop(session_id, None)
 
     async def wait_for_background_tasks(self) -> None:
-        """Wait until all currently scheduled consolidation work has settled."""
+        """Wait until all scheduled consolidation and Dream work has settled."""
 
-        while tasks := tuple(self._consolidation_tasks.items()):
-            await asyncio.gather(
-                *(task for _session_id, task in tasks),
-                return_exceptions=True,
-            )
-            for session_id, task in tasks:
+        while True:
+            consolidation_tasks = tuple(self._consolidation_tasks.items())
+            dream_task = self._dream_task
+            tasks = [task for _session_id, task in consolidation_tasks]
+            if dream_task is not None:
+                tasks.append(dream_task)
+            if not tasks:
+                return
+            await asyncio.gather(*tasks, return_exceptions=True)
+            for session_id, task in consolidation_tasks:
                 self._forget_consolidation_task(session_id, task)
+            if (
+                self._dream_task is dream_task
+                and dream_task is not None
+                and dream_task.done()
+            ):
+                self._dream_task = None
+
+    def _schedule_dream(self) -> None:
+        if self._dream is None:
+            return
+        task = self._dream_task
+        if task is not None and not task.done():
+            self._dream_wakeup_requested = True
+            return
+        self._dream_wakeup_requested = False
+        task = asyncio.create_task(self._run_dream_until_idle())
+        self._dream_task = task
+        task.add_done_callback(self._forget_dream_task)
+
+    async def _run_dream_until_idle(self) -> None:
+        dream = self._dream
+        if dream is None:
+            return
+        try:
+            while True:
+                self._dream_wakeup_requested = False
+                result = await dream.run()
+                if not result.did_work:
+                    if self._dream_wakeup_requested:
+                        continue
+                    return
+                if result.stop_reason != "completed":
+                    return
+                # A completed max-size batch may leave more work. Continue
+                # until the durable Inbox reports empty.
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Background Dream processing failed")
+
+    def _forget_dream_task(self, task: asyncio.Task[None]) -> None:
+        if self._dream_task is task:
+            self._dream_task = None
 
     async def cancel_background_consolidation(self, session_id: str) -> bool:
         """Cancel one Session's proactive consolidation before destructive mutation."""

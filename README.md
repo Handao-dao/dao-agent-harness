@@ -10,6 +10,7 @@ Harness。DAO 是项目的正式产品名称；当前 Python 包名仍为 `agent
 - PendingInput 与 Session 历史
 - ContextBuilder
 - 结构化 ContextSummary 与 token-budget Consolidator
+- Workspace 长期记忆、强类型 Memory Inbox 与两阶段 Dream
 - SkillCatalog、渐进式 Skill 激活与资源读取
 - 模型可见 Runtime Status 快照
 - 六阶段 AgentRuntime
@@ -110,6 +111,9 @@ PendingInput 复检，从而把通常的压缩延迟隐藏在两轮交互之间�
 后台探测默认通过 `proactive_input_reserve_tokens = 2048` 为下一条输入提前留出空间；CLI 可用
 `--proactive-input-reserve-tokens` 或环境变量
 `AGENT_HARNESS_PROACTIVE_INPUT_RESERVE_TOKENS` 覆盖。真实 PendingInput 复检不会重复扣除该预留。
+每次新 ContextSummary 持久化后，其新增覆盖消息块会幂等进入 Memory Inbox。后台 Dream 先生成
+严格 JSON MemoryPlan，再通过仅能访问临时 `MEMORY.md` 的隔离 Runner 做局部编辑；成功后才推进
+游标。长期记忆属于 Workspace，并由 ContextBuilder 作为低频稳定 System Prompt 区块注入。
 CLI 启用 `--context-window-tokens` 后，单条输入默认不得超过可用输入预算的一半；可通过
 `--max-input-tokens` 显式覆盖。超限消息保留在 Pending Queue，允许编辑后重试，不会进入 Provider。
 
@@ -156,7 +160,7 @@ uv run --extra dev ruff check .
 uv sync --extra tokenizers
 ```
 
-当前验证基线为 250 个测试，Ruff 全量检查通过。
+当前验证基线为 276 个测试，Ruff 全量检查通过。
 
 ## 文档
 
@@ -177,4 +181,5 @@ uv sync --extra tokenizers
 - [Runner ContextGovernor 设计](docs/context-governor-design.md)
 - [Runtime Status 设计](docs/runtime-status-design.md)
 - [Session Entry Tree 与事件持久化设计](docs/session-persistence-design.md)
+- [长期记忆与 Dream 设计](docs/memory-system-design.md)
 - [实施状态与提取清单](docs/extraction-checklist.md)

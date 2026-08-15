@@ -9,6 +9,7 @@ from agent_harness.context import (
     ContextBuildError,
     SessionContextResolver,
 )
+from agent_harness.memory import MEMORY_TEMPLATE, InMemoryMemoryStore
 from agent_harness.messages import (
     AssistantMessage,
     ToolCall,
@@ -18,6 +19,29 @@ from agent_harness.messages import (
 from agent_harness.session import PendingInput, Session
 from agent_harness.skills import SkillCatalog, SkillRoot
 from agent_harness.summary import ContextSummary, ContextSummaryContent
+
+
+def test_context_builder_injects_nonempty_long_term_memory(tmp_path) -> None:
+    store = InMemoryMemoryStore(
+        MEMORY_TEMPLATE.replace(
+            "## User Preferences\n",
+            "## User Preferences\n\n- Prefers concise Chinese answers.\n",
+        )
+    )
+
+    prompt = ContextBuilder(tmp_path, memory_store=store).build_system_prompt()
+
+    assert "<long_term_memory>" in prompt
+    assert "Prefers concise Chinese answers" in prompt
+    assert prompt.index("# Tool Contract") < prompt.index("# Long-term Memory")
+
+
+def test_context_builder_skips_empty_memory_template(tmp_path) -> None:
+    prompt = ContextBuilder(
+        tmp_path, memory_store=InMemoryMemoryStore(MEMORY_TEMPLATE)
+    ).build_system_prompt()
+
+    assert "<long_term_memory>" not in prompt
 
 
 def commit_turn(session: Session, input_id: str, question: str, answer: str) -> str:

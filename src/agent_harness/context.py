@@ -104,6 +104,7 @@ class ContextBuilder:
         summary_codec: ContextSummaryCodec | None = None,
         skill_catalog: SkillCatalog | None = None,
         max_active_skill_chars: int = DEFAULT_MAX_ACTIVE_SKILL_CHARS,
+        memory_store: Any | None = None,
     ) -> None:
         if skill_catalog is not None and not isinstance(skill_catalog, SkillCatalog):
             raise TypeError("skill_catalog must be a SkillCatalog")
@@ -113,6 +114,11 @@ class ContextBuilder:
         self._summary_codec = summary_codec or ContextSummaryCodec()
         self._skill_catalog = skill_catalog
         self._max_active_skill_chars = max_active_skill_chars
+        if memory_store is not None and not callable(
+            getattr(memory_store, "read_memory", None)
+        ):
+            raise TypeError("memory_store must provide read_memory()")
+        self._memory_store = memory_store
 
     def build(
         self,
@@ -154,6 +160,9 @@ class ContextBuilder:
             sections.append(bootstrap)
 
         sections.append(self._load_template("tool_contract.md"))
+        memory = self._build_memory_section()
+        if memory:
+            sections.append(memory)
         skill_catalog = self._build_skill_catalog_section()
         if skill_catalog:
             sections.append(skill_catalog)
@@ -188,6 +197,35 @@ class ContextBuilder:
             for skill in skills
         )
         return f"{self._load_template('skills_catalog.md')}\n\n<available_skills>\n{entries}\n</available_skills>"
+
+    def _build_memory_section(self) -> str:
+        store = self._memory_store
+        if store is None:
+            return ""
+        content = store.read_memory()
+        if not isinstance(content, str):
+            raise ContextBuildError("memory_store.read_memory() must return text")
+        content = content.strip()
+        if not content or not self._has_memory_content(content):
+            return ""
+        escaped = (
+            content.replace("<", "\\u003c")
+            .replace(">", "\\u003e")
+            .replace("&", "\\u0026")
+        )
+        return (
+            f"{self._load_template('memory_context.md')}\n\n"
+            "<long_term_memory>\n"
+            f"{escaped}\n"
+            "</long_term_memory>"
+        )
+
+    @staticmethod
+    def _has_memory_content(content: str) -> bool:
+        return any(
+            line.strip() and not line.lstrip().startswith("#")
+            for line in content.splitlines()
+        )
 
     def _build_summary_section(self, content: ContextSummaryContent) -> str:
         if not isinstance(content, ContextSummaryContent):

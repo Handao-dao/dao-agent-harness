@@ -18,6 +18,7 @@ from agent_harness.consolidation import (
 )
 from agent_harness.context import ContextBuilder
 from agent_harness.context_governor import ContextGovernor, ContextGovernorConfig
+from agent_harness.memory import Dream, LocalMemoryStore
 from agent_harness.providers.openai_compatible import OpenAICompatibleProvider
 from agent_harness.runner import AgentRunner
 from agent_harness.runtime import AgentRuntime, RuntimeResult
@@ -135,6 +136,16 @@ def build_parser() -> argparse.ArgumentParser:
             )
         ),
     )
+    parser.add_argument(
+        "--memory-dir",
+        type=Path,
+        default=Path(
+            os.getenv(
+                "AGENT_HARNESS_MEMORY_DIR",
+                str(Path.home() / ".dao-agent" / "memory"),
+            )
+        ),
+    )
     parser.add_argument("--workspace", type=Path, default=Path.cwd())
     return parser
 
@@ -231,9 +242,13 @@ async def run_chat(args: argparse.Namespace) -> int:
     tools.register(ReadSkillResourceTool(skill_catalog))
     store = JsonlSessionStore(args.session_dir)
     checkpoint_store = JsonFileCheckpointStore(args.checkpoint_dir)
+    memory_store = LocalMemoryStore(
+        getattr(args, "memory_dir", Path(args.session_dir).parent / "memory")
+    )
     context_governor = None
     consolidator = None
     token_estimator = None
+    dream = None
     if args.context_window_tokens is not None or args.max_input_tokens is not None:
         token_estimator = build_default_token_estimator(provider)
     if args.context_window_tokens is not None:
@@ -249,6 +264,7 @@ async def run_chat(args: argparse.Namespace) -> int:
             generator=ContextSummaryGenerator(provider, model=args.model),
             token_estimator=token_estimator,
             session_store=store,
+            memory_store=memory_store,
             model=args.model,
             config=ConsolidationConfig(
                 context_window_tokens=args.context_window_tokens,
@@ -256,6 +272,7 @@ async def run_chat(args: argparse.Namespace) -> int:
                 proactive_input_reserve_tokens=args.proactive_input_reserve_tokens,
             ),
         )
+        dream = Dream(store=memory_store, provider=provider, model=args.model)
     max_input_tokens = args.max_input_tokens
     if max_input_tokens is None and args.context_window_tokens is not None:
         input_budget = (
@@ -272,6 +289,7 @@ async def run_chat(args: argparse.Namespace) -> int:
         context_builder=ContextBuilder(
             args.workspace,
             skill_catalog=skill_catalog,
+            memory_store=memory_store,
         ),
         tools=tools,
         model=args.model,
@@ -282,6 +300,7 @@ async def run_chat(args: argparse.Namespace) -> int:
         max_injected_inputs_per_run=args.max_injected_inputs_per_run,
         max_input_tokens=max_input_tokens,
         input_token_estimator=token_estimator,
+        dream=dream,
     )
 
     print(

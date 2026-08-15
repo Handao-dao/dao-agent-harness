@@ -31,8 +31,9 @@
 | Token 压缩与摘要 | `../nanobot/nanobot/agent/memory.py` |
 | Inbound / Outbound 消息 | `../nanobot/nanobot/bus/events.py` |
 
-当前没有复制 nanobot 的 Goal、Subagent、WebUI、Channel、Dream、Heartbeat、Cron 或产品特定
-安全文案。
+当前没有复制 nanobot 的 Goal、Subagent、WebUI、Channel、Heartbeat、Cron 或产品特定
+安全文案。长期记忆只借鉴 nanobot 的两阶段 Dream 行为，使用 DAO 自有的强类型 Inbox、严格
+MemoryPlan、隔离 Runner 和 ContextBuilder 边界重新实现。
 
 ## 3. 当前目录结构
 

@@ -283,7 +283,7 @@ Runner 每次调用 Provider 前从稳定的 `model_message_start` 重新投影�
 - Runtime 事件、trace 和 diagnostics；
 - 主动暂停、PendingInput 局部修订与进程内续跑已实现，见
   [主动暂停与消息修订设计](pause-revision-design.md)；
-- 长期记忆、MCP，以及 Skill Package、安装和 Authoring；
+- RAG、MCP，以及 Skill Package、安装和 Authoring；
 - 工具 approval 和 sandbox 执行策略；
 - 异步或数据库 SessionStore、多进程 lease；
 - GUI、HTTP、Channel Adapter 和通用 TransportMessage；CLI 已按 RuntimeRequest /

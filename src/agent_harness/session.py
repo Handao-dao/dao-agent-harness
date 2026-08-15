@@ -217,10 +217,16 @@ class Session:
     def active_entries(self) -> list[MessageEntry]:
         if self.active_leaf_id is None:
             return []
+        return list(self.branch_entries(self.active_leaf_id))
+
+    def branch_entries(self, leaf_id: str) -> tuple[MessageEntry, ...]:
+        """Return one immutable root-to-leaf Entry path for external resolvers."""
+
+        _require_text(leaf_id, "leaf_id")
         by_id = {entry.id: entry for entry in self.entries}
         path: list[MessageEntry] = []
         visited: set[str] = set()
-        current_id: str | None = self.active_leaf_id
+        current_id: str | None = leaf_id
         while current_id is not None:
             if current_id in visited:
                 raise SessionEventConflictError("Message Entry Tree contains a cycle")
@@ -231,7 +237,7 @@ class Session:
             path.append(entry)
             current_id = entry.parent_id
         path.reverse()
-        return path
+        return tuple(path)
 
     def active_messages(self) -> list[AgentMessage]:
         return [entry.message for entry in self.active_entries()]
